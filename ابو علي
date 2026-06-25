@@ -1,0 +1,128 @@
+# starting_player Path Analysis
+
+## Source Event
+
+`starting_player` is read from game state through:
+
+- `ABOALE.Games.ShootIt.ShootItEventsHandler$$OnStartingPlayerChangeEvent`
+- RVA/VA: `0x5111488`
+
+This function reads `change:gs:starting_player`, converts the value to an integer, stores it into a closure field:
+
+- closure field: `ShootItEventsHandler.<>c__DisplayClass89_0.startingPlayer`
+- field offset: `0x10`
+
+Then it schedules the callback through `InvokeNextFrame`.
+
+## Callback
+
+- `ShootItEventsHandler.<>c__DisplayClass89_0$$<OnStartingPlayerChangeEvent>b__0`
+- RVA/VA: `0x5113C98`
+
+Important instructions:
+
+```asm
+0x5113CE0  LDR X8, [X0,#0xB8]
+0x5113CE4  LDR X8, [X8,#0x60]     ; static Action<int> OnStartingPlayerValueUpdate
+0x5113CEC  LDR W1, [X19,#0x10]    ; closure.startingPlayer
+0x5113D04  BR X3                  ; invoke Action<int>
+```
+
+So `startingPlayer` is passed to subscribers as an `int`.
+
+## Consumer
+
+- `Jawaker.Games.ShootIt.ShootItGameManager$$OnStartingPlayerValueUpdate`
+- RVA/VA: `0x51170E8`
+
+Important instructions:
+
+```asm
+0x51171E0  MOV X0, XZR
+0x51171E4  BL  0x5105E84          ; get local player index/id
+0x51171F8  CMP X8, W19, SXTW      ; compare local player with startingPlayer
+0x5117200  CSET W1, NE            ; bool right = localPlayer != startingPlayer
+0x5117208  B   0x510A7C4          ; ShootItCoinToss.PlayCoinTossAnimation(bool right)
+```
+
+The direct consumer found so far is:
+
+- `Jawaker.Games.ShootIt.ShootItCoinToss$$PlayCoinTossAnimation(bool right)`
+- RVA/VA: `0x510A7C4`
+
+## Interpretation
+
+The `starting_player` path currently appears to control the coin-toss/start-side animation. It does not yet prove that this path controls authoritative turn ownership or shot permission.
+
+Likely split:
+
+- server/game state sends `starting_player`
+- client reads it and updates local presentation/state
+- coin toss animation receives `right = localPlayer != startingPlayer`
+
+## Patch Point
+
+Target instruction:
+
+- VA: `0x5117200`
+- file offset: `0x5113200`
+- original bytes: `E1 07 9F 1A`
+- original instruction: `CSET W1, NE`
+
+## Generated Local Test Builds
+
+### Flip comparison
+
+`C:\Users\Loai\Downloads\New folder\libil2cpp_starting_player_FLIP_EQ.so`
+
+```asm
+CSET W1, NE -> CSET W1, EQ
+```
+
+Bytes:
+
+```text
+E1 07 9F 1A -> E1 17 9F 1A
+```
+
+### Force right = 1
+
+`C:\Users\Loai\Downloads\New folder\libil2cpp_starting_player_RIGHT_ALWAYS_1.so`
+
+```asm
+CSET W1, NE -> MOV W1, #1
+```
+
+Bytes:
+
+```text
+E1 07 9F 1A -> 21 00 80 52
+```
+
+### Force right = 0
+
+`C:\Users\Loai\Downloads\New folder\libil2cpp_starting_player_RIGHT_ALWAYS_0.so`
+
+```asm
+CSET W1, NE -> MOV W1, WZR
+```
+
+Bytes:
+
+```text
+E1 07 9F 1A -> E1 03 1F 2A
+```
+
+## Test Notes
+
+Start with `FLIP_EQ`.
+
+Expected result:
+
+- coin-toss/start-side presentation should flip
+- if gameplay turn does not change, this confirms this patch is presentation-only
+- if shoot control changes too, then this callback affects more client state than currently visible
+
+Then test forced `RIGHT_ALWAYS_1` and `RIGHT_ALWAYS_0` to map what `right` means visually.
+
+The original `libil2cpp.so` was not modified.
